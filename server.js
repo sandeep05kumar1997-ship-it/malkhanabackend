@@ -3,18 +3,18 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
 
-// ─── MULTER (memory storage — we convert to Base64 ourselves) ─────────────────
-const storage = multer.memoryStorage();
+// ─── MULTER ────────────────────────────────────────────────────────────────────
 const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB per file
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) cb(null, true);
-    else cb(new Error('Only image files are allowed'), false);
-  }
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) =>
+    file.mimetype.startsWith('image/') ? cb(null, true) : cb(new Error('Images only'), false)
 });
 
 // ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
@@ -22,355 +22,309 @@ app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// ─── AUTH CONFIG ───────────────────────────────────────────────────────────────
+// ─── AUTH ──────────────────────────────────────────────────────────────────────
 const HARDCODED_USERNAME = 'malkhanaadmin';
 const HARDCODED_PASSWORD = 'malkhanaadmin@123';
 const JWT_SECRET = process.env.JWT_SECRET || 'malkhana_jwt_secret_key_2024';
 const JWT_EXPIRES_IN = '8h';
 
-// ─── AUTH MIDDLEWARE ───────────────────────────────────────────────────────────
 function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ success: false, message: 'Access denied. No token provided.' });
-  }
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    return res.status(403).json({ success: false, message: 'Invalid or expired token. Please login again.' });
-  }
+  const token = (req.headers['authorization'] || '').split(' ')[1];
+  if (!token) return res.status(401).json({ success: false, message: 'No token provided.' });
+  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
+  catch { res.status(403).json({ success: false, message: 'Invalid or expired token.' }); }
 }
 
-// ─── AUTH ROUTES (Public) ──────────────────────────────────────────────────────
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ success: false, message: 'Username and password are required.' });
-  }
-  if (username !== HARDCODED_USERNAME || password !== HARDCODED_PASSWORD) {
-    return res.status(401).json({ success: false, message: 'Invalid username or password.' });
-  }
+  if (!username || !password)
+    return res.status(400).json({ success: false, message: 'Username and password required.' });
+  if (username !== HARDCODED_USERNAME || password !== HARDCODED_PASSWORD)
+    return res.status(401).json({ success: false, message: 'Invalid credentials.' });
   const token = jwt.sign({ username, role: 'admin' }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-  res.status(200).json({
-    success: true,
-    message: 'Login successful',
-    token,
-    user: { username, role: 'admin' },
-    expiresIn: JWT_EXPIRES_IN
-  });
+  res.json({ success: true, message: 'Login successful', token, user: { username, role: 'admin' }, expiresIn: JWT_EXPIRES_IN });
 });
 
-app.get('/api/auth/verify', authenticateToken, (req, res) => {
-  res.status(200).json({ success: true, message: 'Token is valid', user: req.user });
-});
+app.get('/api/auth/verify', authenticateToken, (req, res) =>
+  res.json({ success: true, message: 'Token valid', user: req.user }));
 
-app.post('/api/auth/logout', authenticateToken, (req, res) => {
-  res.status(200).json({ success: true, message: 'Logged out successfully.' });
-});
+app.post('/api/auth/logout', authenticateToken, (req, res) =>
+  res.json({ success: true, message: 'Logged out.' }));
 
 // ─── MONGODB ───────────────────────────────────────────────────────────────────
 const MONGODB_URI = process.env.MONGODB_URI ||
   'mongodb+srv://sandeep05kumar1997_db_user:ffz2VaI6Omp6IqjT@malkhana.r7oy4dg.mongodb.net/malkhana_db?retryWrites=true&w=majority&appName=malkhana';
 
-// Photo sub-schema
 const photoSchema = new mongoose.Schema({
-  filename:    { type: String, required: true },
-  mimetype:    { type: String, required: true },
-  size:        { type: Number },
-  data:        { type: String, required: true }, // Base64 string
-  uploaded_at: { type: Date, default: Date.now }
+  filename: String, mimetype: String, size: Number,
+  data: String, uploaded_at: { type: Date, default: Date.now }
 }, { _id: true });
 
-// Main schema
 const malkhanaSchema = new mongoose.Schema({
-  entry_no:               { type: Number, required: true, unique: true },
-  case_fir_no:            String,
-  police_station:         String,
-  case_section:           String,
-  property_description:   String,
-  property_type:          String,
-  quantity_weight:        String,
-  identification_mark:    String,
-  seal_number:            String,
-  date_of_seizure:        Date,
-  seized_by_officer:      String,
-  received_date_malkhana: Date,
-  malkhana_register_no:   String,
-  storage_location:       String,
-  issued_date:            Date,
-  issued_to:              String,
-  return_date:            Date,
-  final_disposal_type:    String,
-  disposal_date:          Date,
-  remarks:                String,
-  photos: {
-    type: [photoSchema],
-    default: [],
-    validate: [v => v.length <= 5, 'Maximum 5 photos allowed per entry']
-  }
+  entry_no: { type: Number, required: true, unique: true },
+  case_fir_no: String, police_station: String, case_section: String,
+  property_description: String, property_type: String, quantity_weight: String,
+  identification_mark: String, seal_number: String, date_of_seizure: Date,
+  seized_by_officer: String, received_date_malkhana: Date, malkhana_register_no: String,
+  storage_location: String, issued_date: Date, issued_to: String, return_date: Date,
+  final_disposal_type: String, disposal_date: Date, remarks: String,
+  photos: { type: [photoSchema], default: [], validate: [v => v.length <= 5, 'Max 5 photos'] }
 }, { timestamps: true });
 
-const MalkhanaRegister = mongoose.models.MalkhanaRegister ||
-  mongoose.model('MalkhanaRegister', malkhanaSchema);
+const publicTokenSchema = new mongoose.Schema({
+  token:    { type: String, required: true, unique: true },
+  entry_no: { type: Number, required: true },
+  created_at: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 30 } // 30 days TTL
+});
+
+const MalkhanaRegister = mongoose.models.MalkhanaRegister || mongoose.model('MalkhanaRegister', malkhanaSchema);
+const PublicToken = mongoose.models.PublicToken || mongoose.model('PublicToken', publicTokenSchema);
 
 let cachedConnection = null;
 async function connectToDatabase() {
   if (cachedConnection && mongoose.connection.readyState === 1) return cachedConnection;
   cachedConnection = await mongoose.connect(MONGODB_URI);
-  console.log('Database connection established');
   return cachedConnection;
 }
 
-// ─── HELPER: strip Base64 data for list views (return metadata only) ──────────
 function stripPhotoData(record) {
   const obj = record.toObject ? record.toObject() : record;
-  if (obj.photos) {
-    obj.photos = obj.photos.map(({ _id, filename, mimetype, size, uploaded_at }) =>
-      ({ _id, filename, mimetype, size, uploaded_at })
-    );
-  }
+  if (obj.photos) obj.photos = obj.photos.map(({ _id, filename, mimetype, size, uploaded_at }) =>
+    ({ _id, filename, mimetype, size, uploaded_at }));
   return obj;
 }
 
-// ─── MALKHANA CRUD ROUTES (all protected) ─────────────────────────────────────
-
-// GET all — photos metadata only (no Base64 blobs in list for performance)
+// ─── MALKHANA CRUD ─────────────────────────────────────────────────────────────
 app.get('/api/malkhana', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
     const records = await MalkhanaRegister.find().sort({ entry_no: -1 });
-    res.status(200).json({ success: true, count: records.length, data: records.map(stripPhotoData) });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching records', error: error.message });
-  }
+    res.json({ success: true, count: records.length, data: records.map(stripPhotoData) });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// GET single — full record including Base64 photo data
 app.get('/api/malkhana/:entry_no', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
     const record = await MalkhanaRegister.findOne({ entry_no: req.params.entry_no });
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-    res.status(200).json({ success: true, data: record });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching record', error: error.message });
-  }
+    res.json({ success: true, data: record });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// POST create — supports multipart/form-data with photos[] field
 app.post('/api/malkhana', authenticateToken, upload.array('photos', 5), async (req, res) => {
   try {
     await connectToDatabase();
     const body = { ...req.body };
-
-    if (req.files && req.files.length > 0) {
-      body.photos = req.files.map(file => ({
-        filename:    file.originalname,
-        mimetype:    file.mimetype,
-        size:        file.size,
-        data:        file.buffer.toString('base64'),
-        uploaded_at: new Date()
+    if (req.files?.length) {
+      body.photos = req.files.map(f => ({
+        filename: f.originalname, mimetype: f.mimetype, size: f.size,
+        data: f.buffer.toString('base64'), uploaded_at: new Date()
       }));
     }
-
-    const newRecord = new MalkhanaRegister(body);
-    const saved = await newRecord.save();
-    res.status(201).json({ success: true, message: 'Record created successfully', data: saved });
-  } catch (error) {
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: 'Entry number already exists' });
-    }
-    res.status(500).json({ success: false, message: 'Error creating record', error: error.message });
+    const saved = await new MalkhanaRegister(body).save();
+    // Auto-generate public token on create
+    const token = crypto.randomBytes(24).toString('hex');
+    await PublicToken.create({ token, entry_no: saved.entry_no });
+    res.status(201).json({ success: true, message: 'Record created', data: saved, public_token: token });
+  } catch (e) {
+    if (e.code === 11000) return res.status(400).json({ success: false, message: 'Entry number already exists' });
+    res.status(500).json({ success: false, message: e.message });
   }
 });
 
-// PUT update — text fields only (use /photos routes to manage photos)
 app.put('/api/malkhana/:entry_no', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
-    delete req.body.photos; // guard: photos managed via dedicated routes
+    delete req.body.photos;
     const updated = await MalkhanaRegister.findOneAndUpdate(
-      { entry_no: req.params.entry_no },
-      req.body,
-      { new: true, runValidators: true }
+      { entry_no: req.params.entry_no }, req.body, { new: true, runValidators: true }
     );
     if (!updated) return res.status(404).json({ success: false, message: 'Record not found' });
-    res.status(200).json({ success: true, message: 'Record updated successfully', data: updated });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error updating record', error: error.message });
-  }
+    res.json({ success: true, message: 'Record updated', data: updated });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// DELETE record — removes record + all embedded photos
 app.delete('/api/malkhana/:entry_no', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
     const deleted = await MalkhanaRegister.findOneAndDelete({ entry_no: req.params.entry_no });
     if (!deleted) return res.status(404).json({ success: false, message: 'Record not found' });
-    res.status(200).json({ success: true, message: 'Record and all its photos deleted', data: deleted });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error deleting record', error: error.message });
-  }
+    await PublicToken.deleteMany({ entry_no: req.params.entry_no });
+    res.json({ success: true, message: 'Record and QR token deleted', data: deleted });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// Search
 app.get('/api/malkhana/search/:query', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
-    const query = req.params.query;
-    const records = await MalkhanaRegister.find({
-      $or: [
-        { case_fir_no:       { $regex: query, $options: 'i' } },
-        { police_station:    { $regex: query, $options: 'i' } },
-        { property_type:     { $regex: query, $options: 'i' } },
-        { seized_by_officer: { $regex: query, $options: 'i' } }
-      ]
-    });
-    res.status(200).json({ success: true, count: records.length, data: records.map(stripPhotoData) });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error searching records', error: error.message });
-  }
+    const q = req.params.query;
+    const records = await MalkhanaRegister.find({ $or: [
+      { case_fir_no: { $regex: q, $options: 'i' } },
+      { police_station: { $regex: q, $options: 'i' } },
+      { property_type: { $regex: q, $options: 'i' } },
+      { seized_by_officer: { $regex: q, $options: 'i' } }
+    ]});
+    res.json({ success: true, count: records.length, data: records.map(stripPhotoData) });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
 // ─── PHOTO ROUTES ──────────────────────────────────────────────────────────────
-
-// POST /api/malkhana/:entry_no/photos — upload photos (max 5 total per entry)
 app.post('/api/malkhana/:entry_no/photos', authenticateToken, upload.array('photos', 5), async (req, res) => {
   try {
     await connectToDatabase();
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ success: false, message: 'No image files provided' });
-    }
-
+    if (!req.files?.length) return res.status(400).json({ success: false, message: 'No files provided' });
     const record = await MalkhanaRegister.findOne({ entry_no: req.params.entry_no });
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-
     const remaining = 5 - record.photos.length;
-    if (remaining <= 0) {
-      return res.status(400).json({ success: false, message: 'Maximum of 5 photos already reached' });
-    }
-
-    const toAdd = req.files.slice(0, remaining).map(file => ({
-      filename:    file.originalname,
-      mimetype:    file.mimetype,
-      size:        file.size,
-      data:        file.buffer.toString('base64'),
-      uploaded_at: new Date()
+    if (remaining <= 0) return res.status(400).json({ success: false, message: 'Max 5 photos reached' });
+    const toAdd = req.files.slice(0, remaining).map(f => ({
+      filename: f.originalname, mimetype: f.mimetype, size: f.size,
+      data: f.buffer.toString('base64'), uploaded_at: new Date()
     }));
-
     record.photos.push(...toAdd);
     await record.save();
-
-    res.status(200).json({
-      success: true,
-      message: `${toAdd.length} photo(s) added successfully`,
-      total_photos: record.photos.length,
-      photos: record.photos.map(({ _id, filename, mimetype, size, uploaded_at }) =>
-        ({ _id, filename, mimetype, size, uploaded_at }))
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error uploading photos', error: error.message });
-  }
+    res.json({ success: true, message: `${toAdd.length} photo(s) added`, total_photos: record.photos.length,
+      photos: record.photos.map(({ _id, filename, mimetype, size, uploaded_at }) => ({ _id, filename, mimetype, size, uploaded_at })) });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// GET /api/malkhana/:entry_no/photos — list photo metadata
 app.get('/api/malkhana/:entry_no/photos', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
     const record = await MalkhanaRegister.findOne({ entry_no: req.params.entry_no });
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-
-    const metadata = record.photos.map(({ _id, filename, mimetype, size, uploaded_at }) =>
-      ({ _id, filename, mimetype, size, uploaded_at }));
-
-    res.status(200).json({ success: true, count: metadata.length, photos: metadata });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error fetching photos', error: error.message });
-  }
+    res.json({ success: true, count: record.photos.length,
+      photos: record.photos.map(({ _id, filename, mimetype, size, uploaded_at }) => ({ _id, filename, mimetype, size, uploaded_at })) });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// GET /api/malkhana/:entry_no/photos/:photo_id — serve raw image (for <img src="">)
 app.get('/api/malkhana/:entry_no/photos/:photo_id', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
     const record = await MalkhanaRegister.findOne({ entry_no: req.params.entry_no });
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-
     const photo = record.photos.id(req.params.photo_id);
     if (!photo) return res.status(404).json({ success: false, message: 'Photo not found' });
-
-    const imgBuffer = Buffer.from(photo.data, 'base64');
     res.set('Content-Type', photo.mimetype);
     res.set('Content-Disposition', `inline; filename="${photo.filename}"`);
     res.set('Cache-Control', 'private, max-age=3600');
-    res.send(imgBuffer);
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error serving photo', error: error.message });
-  }
+    res.send(Buffer.from(photo.data, 'base64'));
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// DELETE /api/malkhana/:entry_no/photos/:photo_id — remove a single photo
 app.delete('/api/malkhana/:entry_no/photos/:photo_id', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
     const record = await MalkhanaRegister.findOne({ entry_no: req.params.entry_no });
     if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
-
     const photo = record.photos.id(req.params.photo_id);
     if (!photo) return res.status(404).json({ success: false, message: 'Photo not found' });
-
     photo.deleteOne();
     await record.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'Photo deleted successfully',
-      total_photos: record.photos.length
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: 'Error deleting photo', error: error.message });
-  }
+    res.json({ success: true, message: 'Photo deleted', total_photos: record.photos.length });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
 });
 
-// ─── ROOT ──────────────────────────────────────────────────────────────────────
-app.get('/', async (req, res) => {
+// ─── QR TOKEN ROUTES ───────────────────────────────────────────────────────────
+
+// Generate / get existing QR token for a record [Auth required]
+app.post('/api/malkhana/:entry_no/qr-token', authenticateToken, async (req, res) => {
   try {
     await connectToDatabase();
-    res.json({
-      message: 'Malkhana Register API',
-      status: 'Running',
-      database: 'Connected',
-      auth_endpoints: {
-        login:  'POST /api/auth/login',
-        verify: 'GET  /api/auth/verify  [Auth]',
-        logout: 'POST /api/auth/logout  [Auth]'
-      },
-      record_endpoints: {
-        getAll:  'GET    /api/malkhana                           [Auth]',
-        getOne:  'GET    /api/malkhana/:entry_no                 [Auth]',
-        create:  'POST   /api/malkhana  (multipart/form-data)    [Auth]',
-        update:  'PUT    /api/malkhana/:entry_no                 [Auth]',
-        delete:  'DELETE /api/malkhana/:entry_no                 [Auth]',
-        search:  'GET    /api/malkhana/search/:query             [Auth]'
-      },
-      photo_endpoints: {
-        upload: 'POST   /api/malkhana/:entry_no/photos           [Auth] field: photos',
-        list:   'GET    /api/malkhana/:entry_no/photos           [Auth]',
-        serve:  'GET    /api/malkhana/:entry_no/photos/:photo_id [Auth] → raw image',
-        delete: 'DELETE /api/malkhana/:entry_no/photos/:photo_id [Auth]'
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ message: 'Malkhana Register API', status: 'Error', error: error.message });
+    const entry_no = parseInt(req.params.entry_no);
+    const record = await MalkhanaRegister.findOne({ entry_no });
+    if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
+
+    let pt = await PublicToken.findOne({ entry_no });
+    if (!pt) {
+      const token = crypto.randomBytes(24).toString('hex');
+      pt = await PublicToken.create({ token, entry_no });
+    }
+    res.json({ success: true, token: pt.token, entry_no });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+// ─── PUBLIC ROUTES (no auth — for QR scanners) ─────────────────────────────────
+
+app.get('/api/public/:token', async (req, res) => {
+  try {
+    await connectToDatabase();
+    const pt = await PublicToken.findOne({ token: req.params.token });
+    if (!pt) return res.status(404).json({ success: false, message: 'Invalid or expired QR code' });
+
+    const record = await MalkhanaRegister.findOne({ entry_no: pt.entry_no });
+    if (!record) return res.status(404).json({ success: false, message: 'Record no longer exists' });
+
+    const obj = record.toObject();
+    obj.photos = obj.photos.map(({ _id, filename, mimetype, size, uploaded_at }) => ({
+      _id, filename, mimetype, size, uploaded_at,
+      url: `${process.env.BASE_URL || 'https://malkhanabackend.vercel.app'}/api/public/${req.params.token}/photos/${_id}`
+    }));
+    res.json({ success: true, data: obj });
+  } catch (e) { res.status(500).json({ success: false, message: e.message }); }
+});
+
+app.get('/api/public/:token/photos/:photo_id', async (req, res) => {
+  try {
+    await connectToDatabase();
+    const pt = await PublicToken.findOne({ token: req.params.token });
+    if (!pt) return res.status(404).send('Invalid QR token');
+
+    const record = await MalkhanaRegister.findOne({ entry_no: pt.entry_no });
+    if (!record) return res.status(404).send('Record not found');
+
+    const photo = record.photos.id(req.params.photo_id);
+    if (!photo) return res.status(404).send('Photo not found');
+
+    res.set('Content-Type', photo.mimetype);
+    res.set('Content-Disposition', `inline; filename="${photo.filename}"`);
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(photo.data, 'base64'));
+  } catch (e) { res.status(500).send('Error serving photo'); }
+});
+
+// ─── HTML PAGE ROUTES ──────────────────────────────────────────────────────────
+
+// Serve the admin dashboard
+app.get('/', (req, res) => {
+  const indexPath = path.join(__dirname, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.json({ message: 'Malkhana Register API', status: 'Running', note: 'index.html not found in deploy' });
   }
 });
 
-// ─── LOCAL DEV ─────────────────────────────────────────────────────────────────
+// Serve the public QR view page — no auth required
+app.get('/view', (req, res) => {
+  const viewPath = path.join(__dirname, 'view.html');
+  if (fs.existsSync(viewPath)) {
+    res.sendFile(viewPath);
+  } else {
+    res.status(404).send('<h2>View page not deployed. Add view.html to your project root.</h2>');
+  }
+});
+
+// ─── ROOT API INFO (JSON) ──────────────────────────────────────────────────────
+
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
 }
 
 module.exports = app;
+
+app.get('/api', async (req, res) => {
+  try {
+    await connectToDatabase();
+    res.json({
+      message: 'Malkhana Register API', status: 'Running', database: 'Connected',
+      pages: { admin: 'GET /', publicView: 'GET /view?t=TOKEN' },
+      auth: { login: 'POST /api/auth/login', verify: 'GET /api/auth/verify', logout: 'POST /api/auth/logout' },
+      records: { getAll: 'GET /api/malkhana', getOne: 'GET /api/malkhana/:entry_no', create: 'POST /api/malkhana', update: 'PUT /api/malkhana/:entry_no', delete: 'DELETE /api/malkhana/:entry_no' },
+      photos: { upload: 'POST /api/malkhana/:entry_no/photos', list: 'GET /api/malkhana/:entry_no/photos', serve: 'GET /api/malkhana/:entry_no/photos/:id', delete: 'DELETE /api/malkhana/:entry_no/photos/:id' },
+      qr: { generate: 'POST /api/malkhana/:entry_no/qr-token [Auth]', publicData: 'GET /api/public/:token [PUBLIC]', publicPhoto: 'GET /api/public/:token/photos/:id [PUBLIC]' }
+    });
+  } catch (e) { res.status(500).json({ message: 'Error', error: e.message }); }
+});
