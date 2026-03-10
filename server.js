@@ -4,8 +4,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const crypto = require('crypto');
-const path = require('path');
-const fs = require('fs');
+
 
 const app = express();
 
@@ -18,7 +17,10 @@ const upload = multer({
 });
 
 // ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
-app.use(cors());
+app.use(cors({
+  origin: ['https://pachrukhimalkhana.vercel.app', 'http://localhost:3000', 'http://localhost:5500'],
+  credentials: true
+}));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -284,29 +286,20 @@ app.get('/api/public/:token/photos/:photo_id', async (req, res) => {
   } catch (e) { res.status(500).send('Error serving photo'); }
 });
 
-// ─── HTML PAGE ROUTES ──────────────────────────────────────────────────────────
-
-// Serve the admin dashboard
-app.get('/', (req, res) => {
-  const indexPath = path.join(__dirname, 'index.html');
-  if (fs.existsSync(indexPath)) {
-    res.sendFile(indexPath);
-  } else {
-    res.json({ message: 'Malkhana Register API', status: 'Running', note: 'index.html not found in deploy' });
-  }
+// ─── ROOT ──────────────────────────────────────────────────────────────────────
+app.get('/', async (req, res) => {
+  try {
+    await connectToDatabase();
+    res.json({
+      message: 'Malkhana Register API', status: 'Running', database: 'Connected',
+      frontend: 'https://pachrukhimalkhana.vercel.app',
+      auth: { login: 'POST /api/auth/login', verify: 'GET /api/auth/verify', logout: 'POST /api/auth/logout' },
+      records: { getAll: 'GET /api/malkhana', getOne: 'GET /api/malkhana/:entry_no', create: 'POST /api/malkhana', update: 'PUT /api/malkhana/:entry_no', delete: 'DELETE /api/malkhana/:entry_no', search: 'GET /api/malkhana/search/:q' },
+      photos: { upload: 'POST /api/malkhana/:entry_no/photos', list: 'GET /api/malkhana/:entry_no/photos', serve: 'GET /api/malkhana/:entry_no/photos/:id', delete: 'DELETE /api/malkhana/:entry_no/photos/:id' },
+      qr: { generate: 'POST /api/malkhana/:entry_no/qr-token [Auth]', publicData: 'GET /api/public/:token [PUBLIC]', publicPhoto: 'GET /api/public/:token/photos/:id [PUBLIC]' }
+    });
+  } catch (e) { res.status(500).json({ message: 'Error', error: e.message }); }
 });
-
-// Serve the public QR view page — no auth required
-app.get('/view', (req, res) => {
-  const viewPath = path.join(__dirname, 'view.html');
-  if (fs.existsSync(viewPath)) {
-    res.sendFile(viewPath);
-  } else {
-    res.status(404).send('<h2>View page not deployed. Add view.html to your project root.</h2>');
-  }
-});
-
-// ─── ROOT API INFO (JSON) ──────────────────────────────────────────────────────
 
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
@@ -314,17 +307,3 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 module.exports = app;
-
-app.get('/api', async (req, res) => {
-  try {
-    await connectToDatabase();
-    res.json({
-      message: 'Malkhana Register API', status: 'Running', database: 'Connected',
-      pages: { admin: 'GET /', publicView: 'GET /view?t=TOKEN' },
-      auth: { login: 'POST /api/auth/login', verify: 'GET /api/auth/verify', logout: 'POST /api/auth/logout' },
-      records: { getAll: 'GET /api/malkhana', getOne: 'GET /api/malkhana/:entry_no', create: 'POST /api/malkhana', update: 'PUT /api/malkhana/:entry_no', delete: 'DELETE /api/malkhana/:entry_no' },
-      photos: { upload: 'POST /api/malkhana/:entry_no/photos', list: 'GET /api/malkhana/:entry_no/photos', serve: 'GET /api/malkhana/:entry_no/photos/:id', delete: 'DELETE /api/malkhana/:entry_no/photos/:id' },
-      qr: { generate: 'POST /api/malkhana/:entry_no/qr-token [Auth]', publicData: 'GET /api/public/:token [PUBLIC]', publicPhoto: 'GET /api/public/:token/photos/:id [PUBLIC]' }
-    });
-  } catch (e) { res.status(500).json({ message: 'Error', error: e.message }); }
-});
