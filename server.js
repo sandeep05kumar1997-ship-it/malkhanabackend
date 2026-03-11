@@ -62,15 +62,88 @@ const photoSchema = new mongoose.Schema({
   data: String, uploaded_at: { type: Date, default: Date.now }
 }, { _id: true });
 
+/**
+ * Updated schema as per new register format (SP sir's instructions):
+ *
+ *  1.  क्रम संख्या                          → entry_no (auto/unique)
+ *  2.  स्वामी का नाम एवं पता                → owner_name, owner_address
+ *  3.  केस की संख्या एवं तिथि               → case_fir_no, case_date
+ *  4.  संपत्ति का प्रकार                     → property_type
+ *  5.  पहचान चिन्ह सहित संपत्ति का विवरण   → property_description, identification_mark
+ *  6.  मूल्य                                 → property_value
+ *  7.  कहाँ, कब, किसके द्वारा तथा किस       → found_place, found_date,
+ *      परिस्थिति में पाई गई                    found_by_officer, found_circumstances
+ *  8.  थाने में पाई गई तिथि                 → received_at_police_station_date
+ *  9.  जप्त करने के बाद संपत्ति कहाँ रखी गई → storage_location
+ * 10.  निपटान की तिथि एवं विधि              → disposal_date, disposal_method
+ * 11.  प्राप्ति संचिका प्रविष्टि संख्या /    → receipt_file_entry_no,
+ *      बिक्री मूल्य / खरीदार / चेक विवरण      sale_amount, buyer_name,
+ *                                              buyer_address, receipt_check_no,
+ *                                              receipt_check_date
+ * 12.  अभियुक्ति / टिप्पणी                  → accusation_remarks
+ * 13.  विलम्ब का कारण                        → delay_reason
+ * 14.  Remarks / अन्य टिप्पणी               → remarks
+ */
 const malkhanaSchema = new mongoose.Schema({
+  // ── Field 1: Serial number ──────────────────────────────────────────────────
   entry_no: { type: Number, required: true, unique: true },
-  case_fir_no: String, police_station: String, case_section: String,
-  property_description: String, property_type: String, quantity_weight: String,
-  identification_mark: String, seal_number: String, date_of_seizure: Date,
-  seized_by_officer: String, received_date_malkhana: Date, malkhana_register_no: String,
-  storage_location: String, issued_date: Date, issued_to: String, return_date: Date,
-  final_disposal_type: String, disposal_date: Date, remarks: String,
+
+  // ── Field 2: Owner details ──────────────────────────────────────────────────
+  owner_name:    { type: String, default: '' }, // स्वामी का नाम
+  owner_address: { type: String, default: '' }, // स्वामी का पता
+
+  // ── Field 3: Case number & date ─────────────────────────────────────────────
+  case_fir_no:     { type: String, default: '' }, // केस / FIR संख्या
+  case_date:       { type: Date },                // केस की तिथि
+  police_station:  { type: String, default: '' }, // थाना (kept for backward compat)
+
+  // ── Field 4: Property type ──────────────────────────────────────────────────
+  // e.g. चोरी की गई / निर्यातित / दावा रहित / संदेहास्पद
+  property_type: { type: String, default: '' },
+
+  // ── Field 5: Property description & identification mark ─────────────────────
+  property_description: { type: String, default: '' },
+  identification_mark:  { type: String, default: '' },
+
+  // ── Field 6: Value ──────────────────────────────────────────────────────────
+  property_value: { type: String, default: '' }, // मूल्य (string to allow "₹5,000 approx")
+
+  // ── Field 7: Where / when / by whom / circumstances found ───────────────────
+  found_place:        { type: String, default: '' }, // कहाँ पाई गई
+  found_date:         { type: Date },                // कब पाई गई
+  found_by_officer:   { type: String, default: '' }, // किसके द्वारा
+  found_circumstances:{ type: String, default: '' }, // किस परिस्थिति में
+
+  // ── Field 8: Date received at police station ────────────────────────────────
+  received_at_police_station_date: { type: Date },   // थाने में पाई गई तिथि
+
+  // ── Field 9: Storage location after seizure ─────────────────────────────────
+  storage_location: { type: String, default: '' },
+
+  // ── Field 10: Disposal date & method ───────────────────────────────────────
+  disposal_date:   { type: Date },
+  disposal_method: { type: String, default: '' }, // निपटान की विधि
+
+  // ── Field 11: Receipt file entry / sale details ─────────────────────────────
+  receipt_file_entry_no: { type: String, default: '' }, // प्राप्ति संचिका प्रविष्टि संख्या
+  sale_amount:           { type: String, default: '' }, // बिक्री मूल्य
+  buyer_name:            { type: String, default: '' }, // खरीदार का नाम
+  buyer_address:         { type: String, default: '' }, // खरीदार का पता
+  receipt_check_no:      { type: String, default: '' }, // प्राप्ति चेक संख्या
+  receipt_check_date:    { type: Date },                // प्राप्ति चेक तिथि
+
+  // ── Field 12: Accusation / comments ────────────────────────────────────────
+  accusation_remarks: { type: String, default: '' }, // अभियुक्ति / टिप्पणी
+
+  // ── Field 13: Reason for delay in disposal ──────────────────────────────────
+  delay_reason: { type: String, default: '' }, // विलम्ब का कारण
+
+  // ── Field 14: General remarks ───────────────────────────────────────────────
+  remarks: { type: String, default: '' }, // Remarks / अन्य टिप्पणी
+
+  // ── Photos (up to 5) ────────────────────────────────────────────────────────
   photos: { type: [photoSchema], default: [], validate: [v => v.length <= 5, 'Max 5 photos'] }
+
 }, { timestamps: true });
 
 const publicTokenSchema = new mongoose.Schema({
@@ -162,10 +235,12 @@ app.get('/api/malkhana/search/:query', authenticateToken, async (req, res) => {
     await connectToDatabase();
     const q = req.params.query;
     const records = await MalkhanaRegister.find({ $or: [
-      { case_fir_no: { $regex: q, $options: 'i' } },
-      { police_station: { $regex: q, $options: 'i' } },
-      { property_type: { $regex: q, $options: 'i' } },
-      { seized_by_officer: { $regex: q, $options: 'i' } }
+      { case_fir_no:      { $regex: q, $options: 'i' } },
+      { police_station:   { $regex: q, $options: 'i' } },
+      { property_type:    { $regex: q, $options: 'i' } },
+      { owner_name:       { $regex: q, $options: 'i' } },
+      { found_by_officer: { $regex: q, $options: 'i' } },
+      { buyer_name:       { $regex: q, $options: 'i' } }
     ]});
     res.json({ success: true, count: records.length, data: records.map(stripPhotoData) });
   } catch (e) { res.status(500).json({ success: false, message: e.message }); }
@@ -296,7 +371,23 @@ app.get('/', async (req, res) => {
       auth: { login: 'POST /api/auth/login', verify: 'GET /api/auth/verify', logout: 'POST /api/auth/logout' },
       records: { getAll: 'GET /api/malkhana', getOne: 'GET /api/malkhana/:entry_no', create: 'POST /api/malkhana', update: 'PUT /api/malkhana/:entry_no', delete: 'DELETE /api/malkhana/:entry_no', search: 'GET /api/malkhana/search/:q' },
       photos: { upload: 'POST /api/malkhana/:entry_no/photos', list: 'GET /api/malkhana/:entry_no/photos', serve: 'GET /api/malkhana/:entry_no/photos/:id', delete: 'DELETE /api/malkhana/:entry_no/photos/:id' },
-      qr: { generate: 'POST /api/malkhana/:entry_no/qr-token [Auth]', publicData: 'GET /api/public/:token [PUBLIC]', publicPhoto: 'GET /api/public/:token/photos/:id [PUBLIC]' }
+      qr: { generate: 'POST /api/malkhana/:entry_no/qr-token [Auth]', publicData: 'GET /api/public/:token [PUBLIC]', publicPhoto: 'GET /api/public/:token/photos/:id [PUBLIC]' },
+      schema_fields: {
+        "1_entry_no": "क्रम संख्या (auto, unique)",
+        "2_owner": "owner_name, owner_address — स्वामी का नाम एवं पता",
+        "3_case": "case_fir_no, case_date, police_station — केस संख्या एवं तिथि",
+        "4_property_type": "property_type — संपत्ति का प्रकार",
+        "5_description": "property_description, identification_mark — पहचान चिन्ह सहित विवरण",
+        "6_value": "property_value — मूल्य",
+        "7_found": "found_place, found_date, found_by_officer, found_circumstances",
+        "8_received": "received_at_police_station_date — थाने में पाई गई तिथि",
+        "9_storage": "storage_location — जप्त के बाद संपत्ति कहाँ रखी",
+        "10_disposal": "disposal_date, disposal_method — निपटान की तिथि एवं विधि",
+        "11_receipt": "receipt_file_entry_no, sale_amount, buyer_name, buyer_address, receipt_check_no, receipt_check_date",
+        "12_accusation": "accusation_remarks — अभियुक्ति / टिप्पणी",
+        "13_delay": "delay_reason — विलम्ब का कारण",
+        "14_remarks": "remarks — अन्य टिप्पणी"
+      }
     });
   } catch (e) { res.status(500).json({ message: 'Error', error: e.message }); }
 });
